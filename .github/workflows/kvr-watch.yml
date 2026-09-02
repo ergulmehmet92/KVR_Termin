@@ -127,7 +127,7 @@ jobs:
 
     steps:
       - name: Check out the watcher
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         # persist-credentials (default true) leaves the GITHUB_TOKEN in the
         # local git config so the state commit below can push.
 

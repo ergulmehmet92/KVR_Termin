@@ -131,17 +131,7 @@ jobs:
         # persist-credentials (default true) leaves the GITHUB_TOKEN in the
         # local git config so the state commit below can push.
 
-      # No setup-python step on purpose: ubuntu-latest already ships a python3
-      # new enough for zoneinfo, and watch.py is stdlib-only. One less action
-      # to trust, one less thing to break, and a faster job.
-      - name: Show the interpreter
-        shell: sh
-        run: |
-          set -eu
-          python3 --version
-          python3 -c 'from zoneinfo import ZoneInfo; print("tzdata ok:", ZoneInfo("Europe/Berlin"))'
-
-      - name: Poll the KVR calendar for ~9 minutes
+      - name: Poll the KVR calendar continuously
         shell: sh
         env:
           # Secrets are injected as env, never interpolated into the run script
@@ -160,8 +150,7 @@ jobs:
           # Retires itself the day after the appointment, so a forgotten
           # workflow does not keep polling a municipal API indefinitely.
           KVR_RETIRE_AFTER: ${{ vars.KVR_TARGET_BEFORE }}
-          KVR_DAILY_HEARTBEAT: '1'
-          KVR_HEARTBEAT_HOUR: '9'
+          KVR_DAILY_HEARTBEAT: '0'
           KVR_FAIL_THRESHOLD: '3'
           PYTHONUNBUFFERED: '1'
         run: |
@@ -169,13 +158,11 @@ jobs:
           # No `set -x`, ever. Tracing would print the environment into a
           # world-readable log.
 
-          POLLS=6
+          POLLS=16
           ok=0
           i=1
 
           while [ "$i" -le "$POLLS" ]; do
-            printf '\n===== poll %s of %s =====\n' "$i" "$POLLS"
-
             # watch.py exits non-zero on a failed poll, and has already tried
             # to tell the user over Telegram by then. One bad poll must not
             # abandon the remaining eight minutes of this run, so the failure
@@ -190,8 +177,7 @@ jobs:
               # Jittered. Perfect periodicity from one IP is itself a bot
               # signature to the F5 layer in front of this API, and looking
               # like a bot is the risk here — not the request rate.
-              nap=$(python3 -c 'import random; print(random.randint(75, 105))')
-              echo "sleeping ${nap}s"
+              nap=$(python3 -c 'import random; print(random.randint(25, 40))')
               sleep "$nap"
             fi
 

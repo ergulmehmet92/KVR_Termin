@@ -1,0 +1,229 @@
+# ---------------------------------------------------------------------------
+# kvr-watch — the always-on half of the appointment watcher.
+#
+# NOT ACTIVE AS IT SITS. This file is a .tmpl on purpose; GitHub only runs
+# workflows at .github/workflows/*.yml. deploy.sh copies it into place.
+#
+# ---------------------------------------------------------------------------
+# THE ONE THING TO GET RIGHT: THIS REPO MUST BE PUBLIC.
+#
+#   Public repos get genuinely unmetered Actions minutes on standard runners,
+#   so this schedule costs $0.00/month with no allowance to exhaust.
+#     https://docs.github.com/en/billing/concepts/product-billing/github-actions
+#
+#   A PRIVATE repo is the trap. GitHub Free gives 2,000 minutes/month, every
+#   job is rounded UP to a whole minute, and a user-level budget is a HARD STOP
+#   with no payment method. At this cadence a private repo silently stops
+#   watching partway through the month — which is precisely the "I closed my
+#   laptop and heard nothing" failure this whole thing exists to prevent.
+#
+#   Public is safe here because the secrets below are never exposed to forks:
+#   "With the exception of GITHUB_TOKEN, secrets are not passed to the runner
+#   when a workflow is triggered from a forked repository."
+#     https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets
+#   That guarantee holds only while the triggers stay `schedule` and
+#   `workflow_dispatch`. NEVER add pull_request_target, workflow_run or
+#   issue_comment to this file — those are privileged triggers and a stranger's
+#   pull request would then run with your Telegram token in scope.
+#
+#   The real exposure on a public repo is the LOGS, which are world-readable
+#   forever. Nothing here echoes a secret, and watch.py scrubs its own output.
+#   Do not add `set -x`, do not `echo` any env var, do not upload logs as
+#   artifacts.
+#
+# ---------------------------------------------------------------------------
+# WHAT TO CREATE BEFORE ENABLING THIS (a human does this once)
+#
+#   Secrets  (Settings > Secrets and variables > Actions > Secrets)
+#     TG_BOT_TOKEN     the @BotFather token
+#     TG_CHAT_ID       the chat id
+#     KVR_FALLNUMMER   "CASE-123 / Muster" — personal data, so a SECRET even
+#                      though it is not a credential. It is read-only decoration
+#                      on the alert; the watcher never sends it anywhere but
+#                      Telegram.
+#   (No PAT of any kind. State is committed back to this repo with the
+#   built-in GITHUB_TOKEN, which exists only for the duration of a run.)
+#
+#   Variables  (same page > Variables) — NOT secrets. Non-secret values are far
+#   easier to debug, and neither of these is sensitive.
+#     KVR_TARGET_BEFORE  2026-10-13   the appointment you already hold
+#
+#   State lives at state/kvr-state.json in this repo, committed by the workflow.
+#   It holds dates and counters only — never the Fallnummer, never a token.
+#   On a public repo it is world-readable, which is fine for what it contains.
+#
+# ---------------------------------------------------------------------------
+# WHY THE CRON IS EVERY 10 MINUTES BUT THE POLL IS EVERY ~90 SECONDS
+#
+#   GitHub documents, in writing, that scheduled runs are unreliable: "The
+#   schedule event can be delayed during periods of high loads... If the load is
+#   sufficiently high enough, some queued jobs may be dropped." There is no
+#   published delay figure, no SLA, and no retry for a dropped run.
+#     https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+#
+#   So the scheduler is not treated as the clock. Each run polls in a loop for
+#   about nine minutes. A delayed run shifts the window instead of punching a
+#   hole in it, and a dropped run costs ~10 minutes of coverage rather than
+#   leaving a gap in a tight cron that also drifts. The 5-minute cron floor is
+#   irrelevant once the polling happens inside the job.
+#
+#   Effective cadence is ~1 GET / 90s = ~0.7 of the API's 120-per-60s budget,
+#   i.e. well under 1%. Politeness here is not about the published limit — it is
+#   about the separate F5 blacklist heuristic whose threshold is unknown, and
+#   being blocked defeats the entire purpose.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS CANNOT DO, AND WHAT COVERS IT
+#
+#   A job cannot notice that it has stopped being run. If this workflow gets
+#   disabled, or the PAT expires, or the repo is archived, nothing here fires.
+#   Two things cover that, and both are worth having:
+#     1. The daily heartbeat push (on by default). If the daily "watcher alive"
+#        message stops arriving, the watcher is dead.
+#     2. state/kvr-state.json stops being updated — check the repo's commit
+#        history. No commit for over a day means the cron has stopped firing.
+#        It makes no KVR request; it only shouts if polling has stopped.
+#
+#   Keep the laptop watcher running alongside this for at least the first 48
+#   hours. Two independent observers sharing one gist never double-alert, and
+#   running both is how you find out this one actually reaches your phone
+#   before you trust it with a closed lid.
+# ---------------------------------------------------------------------------
+
+name: kvr-watch
+
+on:
+  schedule:
+    # UTC — cron has no local-time option. Munich is CEST (UTC+2) until
+    # 2026-10-25, which is after the 2026-10-13 appointment, so no DST
+    # transition falls inside this watch and no offset handling is needed.
+    # Round the clock on purpose: a cancellation is released the moment a
+    # stranger clicks cancel, and that is not restricted to office hours.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+# State is committed back to this repo using the built-in GITHUB_TOKEN, so no
+# personal access token has to exist at all. That matters on a PUBLIC repo: a
+# PAT with `repo` scope sitting in secrets would be a far bigger prize than
+# anything this watcher protects. contents: write is the price, and it is the
+# whole permission set. The commit also counts as repo activity, which is what
+# stops GitHub disabling the cron after 60 days of quiet.
+permissions:
+  contents: write
+
+# A run that arrives while the previous one is still polling waits its turn
+# rather than doubling the request rate. cancel-in-progress must stay false:
+# cancelling mid-run would kill a poll that might be the one that matters.
+concurrency:
+  group: kvr-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # Hard stop. Without this a hung request could sit for up to six hours,
+    # blocking the concurrency group and starving every later run.
+    timeout-minutes: 12
+
+    steps:
+      - name: Check out the watcher
+        uses: actions/checkout@v4
+        # persist-credentials (default true) leaves the GITHUB_TOKEN in the
+        # local git config so the state commit below can push.
+
+      # No setup-python step on purpose: ubuntu-latest already ships a python3
+      # new enough for zoneinfo, and watch.py is stdlib-only. One less action
+      # to trust, one less thing to break, and a faster job.
+      - name: Show the interpreter
+        shell: sh
+        run: |
+          set -eu
+          python3 --version
+          python3 -c 'from zoneinfo import ZoneInfo; print("tzdata ok:", ZoneInfo("Europe/Berlin"))'
+
+      - name: Poll the KVR calendar for ~9 minutes
+        shell: sh
+        env:
+          # Secrets are injected as env, never interpolated into the run script
+          # itself — an expression inside a shell line can end up in the log if
+          # anything ever traces the command.
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          KVR_FALLNUMMER: ${{ secrets.KVR_FALLNUMMER }}
+          KVR_STATE_FILE: state/kvr-state.json
+          # Unchanged state is rewritten at most daily: the write is what makes
+          # a commit, and 144 commits a day would be noise. A state change that
+          # MATTERS (a new date, an alert, a failure streak) still writes and
+          # commits immediately — that path does not consult this interval.
+          KVR_STATE_MIN_WRITE: '86400'
+          KVR_TARGET_BEFORE: ${{ vars.KVR_TARGET_BEFORE }}
+          # Retires itself the day after the appointment, so a forgotten
+          # workflow does not keep polling a municipal API indefinitely.
+          KVR_RETIRE_AFTER: ${{ vars.KVR_TARGET_BEFORE }}
+          KVR_DAILY_HEARTBEAT: '1'
+          KVR_HEARTBEAT_HOUR: '9'
+          KVR_FAIL_THRESHOLD: '3'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set -eu
+          # No `set -x`, ever. Tracing would print the environment into a
+          # world-readable log.
+
+          POLLS=6
+          ok=0
+          i=1
+
+          while [ "$i" -le "$POLLS" ]; do
+            printf '\n===== poll %s of %s =====\n' "$i" "$POLLS"
+
+            # watch.py exits non-zero on a failed poll, and has already tried
+            # to tell the user over Telegram by then. One bad poll must not
+            # abandon the remaining eight minutes of this run, so the failure
+            # is counted rather than propagated.
+            if python3 cloud/watch.py; then
+              ok=$((ok + 1))
+            else
+              echo "poll $i failed; watch.py has already attempted to notify"
+            fi
+
+            if [ "$i" -lt "$POLLS" ]; then
+              # Jittered. Perfect periodicity from one IP is itself a bot
+              # signature to the F5 layer in front of this API, and looking
+              # like a bot is the risk here — not the request rate.
+              nap=$(python3 -c 'import random; print(random.randint(75, 105))')
+              echo "sleeping ${nap}s"
+              sleep "$nap"
+            fi
+
+            i=$((i + 1))
+          done
+
+          printf '\n===== %s of %s polls succeeded =====\n' "$ok" "$POLLS"
+
+          # Red only when the run was genuinely blind for its whole window. A
+          # single transient 5xx among six polls is not worth a failure email;
+          # six of six is, and watch.py will have pushed about it too.
+          if [ "$ok" -eq 0 ]; then
+            echo "every poll in this run failed — the watcher is blind"
+            exit 1
+          fi
+
+      - name: Persist state back to the repo
+        # always(): the state file is the watcher's memory. If the poll step
+        # failed we especially want the failure counter persisted, otherwise the
+        # 'watcher is blind' push can never reach its threshold across runs.
+        if: always()
+        shell: sh
+        run: |
+          set -eu
+          if [ -z "$(git status --porcelain state/ 2>/dev/null)" ]; then
+            echo "state unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name  "kvr-watch"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git commit -m "state: $(date -u +%Y-%m-%dT%H:%MZ)"
+          # A concurrent run may have pushed first. Rebase and retry once rather
+          # than failing the job over a bookkeeping commit.
+          git push || { git pull --rebase --autostash && git push; }

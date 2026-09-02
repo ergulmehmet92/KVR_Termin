@@ -1,0 +1,9 @@
+# Never let local config or state near this repo — config.json holds the live
+# Telegram bot token and the Fallnummer.
+config.json
+state.json
+state.cloud.json
+cookies.txt
+*.log
+*.log.*
+__pycache__/

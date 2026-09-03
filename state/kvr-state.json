@@ -6,11 +6,10 @@
   "broken_alert_at_failures": 0,
   "broken_alert_iso": "",
   "consecutive_failures": 0,
-  "earliest_date": "2026-10-13",
+  "earliest_date": "2026-10-14",
   "empty_calendar_streak": 0,
   "failure_count": 0,
   "known_dates": [
-    "2026-10-13",
     "2026-10-14",
     "2026-10-15",
     "2026-10-20",
@@ -36,12 +35,12 @@
   "last_error": "",
   "last_error_iso": "",
   "last_heartbeat_date": "2026-09-02",
-  "last_poll_epoch": 1788432285,
-  "last_poll_iso": "2026-09-03T12:44:45+02:00",
-  "last_success_epoch": 1788432286,
-  "last_success_iso": "2026-09-03T12:44:46+02:00",
-  "last_write_epoch": 1788432285,
-  "poll_count": 4,
+  "last_poll_epoch": 1788458727,
+  "last_poll_iso": "2026-09-03T20:05:27+02:00",
+  "last_success_epoch": 1788458729,
+  "last_success_iso": "2026-09-03T20:05:29+02:00",
+  "last_write_epoch": 1788458727,
+  "poll_count": 5,
   "schema": 1,
-  "success_count": 4
+  "success_count": 5
 }

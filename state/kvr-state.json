@@ -30,17 +30,18 @@
     "2026-11-25",
     "2026-11-26",
     "2026-12-01",
-    "2026-12-02"
+    "2026-12-02",
+    "2026-12-03"
   ],
   "last_error": "",
   "last_error_iso": "",
   "last_heartbeat_date": "2026-09-02",
-  "last_poll_epoch": 1788458727,
-  "last_poll_iso": "2026-09-03T20:05:27+02:00",
-  "last_success_epoch": 1788458729,
-  "last_success_iso": "2026-09-03T20:05:29+02:00",
-  "last_write_epoch": 1788458727,
-  "poll_count": 5,
+  "last_poll_epoch": 1788512985,
+  "last_poll_iso": "2026-09-04T11:09:45+02:00",
+  "last_success_epoch": 1788512987,
+  "last_success_iso": "2026-09-04T11:09:47+02:00",
+  "last_write_epoch": 1788512985,
+  "poll_count": 6,
   "schema": 1,
-  "success_count": 5
+  "success_count": 6
 }
